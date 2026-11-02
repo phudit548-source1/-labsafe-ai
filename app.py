@@ -5,40 +5,50 @@ from google.genai import types
 import gradio as gr
 from PIL import Image
 
-# ลองโมเดลหลักก่อน ถ้าช้าเกินเวลา/ไม่ว่าง จะสลับไปรุ่นที่เบากว่าอัตโนมัติ
+# เริ่มจากโมเดลที่เร็วที่สุดก่อน; ตั้ง GEMINI_MODEL ใน Render เพื่อเลือกตัวแรกเองได้
 _env_model = os.getenv("GEMINI_MODEL", "").strip()
 MODELS = list(dict.fromkeys(
-    ([_env_model] if _env_model else []) + ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+    ([_env_model] if _env_model else []) + ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
 ))
+
+# ถ้าโมเดลไหนไม่ตอบภายในเวลานี้ (วินาที) จะข้ามไปโมเดลถัดไป
+TIMEOUT_SEC = int(os.getenv("GEMINI_TIMEOUT", "45"))
 
 
 def make_config(thinking=True):
-    # ให้โมเดลคิดน้อยที่สุด (สาเหตุหลักที่ตอบช้าจนหมดเวลา)
+    base = dict(
+        temperature=0.1,
+        max_output_tokens=1500,  # จำกัดความยาวคำตอบ ไม่ให้ตอบยาวเกินจำเป็น
+        http_options=types.HttpOptions(timeout=TIMEOUT_SEC * 1000),
+    )
     if thinking:
         try:
             return types.GenerateContentConfig(
-                temperature=0.1,
-                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                thinking_config=types.ThinkingConfig(thinking_level="minimal"), **base
             )
         except Exception:
             pass
-    return types.GenerateContentConfig(temperature=0.1)
+    return types.GenerateContentConfig(**base)
+
 
 def check_object(image, expected_list, api_key):
 
     if not api_key:
-        return "กรุณากรอก Gemini API Key ก่อนค่ะ"
+        yield "กรุณากรอก Gemini API Key ก่อนค่ะ"
+        return
 
     if image is None:
-        return "กรุณาอัปโหลดภาพก่อนค่ะ"
+        yield "กรุณาอัปโหลดภาพก่อนค่ะ"
+        return
 
     if not expected_list:
-        return "กรุณาเลือกอุปกรณ์ PPE อย่างน้อย 1 รายการค่ะ"
+        yield "กรุณาเลือกอุปกรณ์ PPE อย่างน้อย 1 รายการค่ะ"
+        return
 
     try:
         img = image.convert("RGB")
         # ย่อภาพก่อนส่ง: ภาพจากมือถือมักใหญ่หลาย MB ทำให้อัปโหลดและประมวลผลช้า
-        img.thumbnail((896, 896))
+        img.thumbnail((768, 768))
 
         client = genai.Client(api_key=api_key.strip())
 
@@ -100,52 +110,71 @@ def check_object(image, expected_list, api_key):
 หมายเหตุ:
 การวิเคราะห์จากภาพเป็นเพียงการประเมินเบื้องต้น
 ไม่ใช่การรับรองความปลอดภัยในการเข้าห้องปฏิบัติการ
+
+ตอบให้กระชับ รายละเอียดของแต่ละอุปกรณ์ไม่เกิน 1-2 ประโยค
 """
 
         last_error = ""
         for model in MODELS:
             use_thinking = True
             for attempt in range(2):
+                text = ""
                 try:
-                    response = client.models.generate_content(
+                    stream = client.models.generate_content_stream(
                         model=model,
                         contents=[img, prompt],
                         config=make_config(use_thinking),
                     )
-                    return (response.text or "").strip() or "AI ไม่ส่งผลการวิเคราะห์กลับมา กรุณาลองใหม่อีกครั้ง"
+                    for chunk in stream:
+                        if chunk.text:
+                            text += chunk.text
+                            yield text  # แสดงผลทีละส่วนระหว่างที่ AI กำลังเขียน
+                    if text.strip():
+                        return
+                    last_error = "AI ไม่ส่งผลการวิเคราะห์กลับมา"
+                    break
 
                 except Exception as e:
                     error = str(e)
                     last_error = error
+                    low = error.lower()
 
-                    # โมเดลบางรุ่นไม่รองรับการตั้งค่า thinking -> ลองใหม่โดยไม่ตั้ง
-                    if "400" in error and "thinking" in error.lower() and use_thinking:
+                    # ได้ผลมาเกือบครบแล้วแต่หลุดกลางทาง -> แสดงเท่าที่ได้
+                    if len(text) > 200:
+                        yield text + "\n\n_⚠️ การเชื่อมต่อขาดก่อนผลจะครบ กดตรวจสอบอีกครั้งหากต้องการผลเต็ม_"
+                        return
+
+                    if "400" in error and "thinking" in low and use_thinking:
                         use_thinking = False
                         continue
 
                     if "401" in error or "403" in error or "API_KEY_INVALID" in error or "PERMISSION_DENIED" in error:
-                        return "API Key ไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน กรุณาตรวจสอบ API Key ใน Google AI Studio"
+                        yield "API Key ไม่ถูกต้องหรือไม่มีสิทธิ์ใช้งาน กรุณาตรวจสอบ API Key ใน Google AI Studio"
+                        return
 
                     if "503" in error or "UNAVAILABLE" in error:
                         if attempt == 0:
-                            time.sleep(2)
+                            time.sleep(1)
                             continue
-                        break  # ลองโมเดลถัดไป
+                        break
 
-                    if "504" in error or "DEADLINE_EXCEEDED" in error or "404" in error or "NOT_FOUND" in error:
-                        break  # ช้าเกินเวลาหรือไม่พบโมเดล -> ลองโมเดลถัดไปทันที
+                    if ("504" in error or "DEADLINE_EXCEEDED" in error or "timeout" in low
+                            or "timed out" in low or "404" in error or "NOT_FOUND" in error
+                            or "429" in error or "RESOURCE_EXHAUSTED" in error):
+                        break  # ช้าเกิน/ไม่พบ/โควตาหมด -> ลองโมเดลถัดไปทันที
 
-                    if "429" in error or "RESOURCE_EXHAUSTED" in error:
-                        break  # โควตาโมเดลนี้หมด -> ลองโมเดลถัดไป
+                    yield f"เกิดข้อผิดพลาดในการประมวลผลภาพ ({model}): {error}"
+                    return
 
-                    return f"เกิดข้อผิดพลาดในการประมวลผลภาพ ({model}): {error}"
+            yield f"⏳ โมเดล {model} ตอบช้า กำลังลองโมเดลถัดไป..."
 
         if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error:
-            return "ใช้งาน API เกินโควตา กรุณารอสักครู่แล้วลองใหม่อีกครั้ง"
-        return f"ระบบ Gemini ตอบช้าหรือไม่ว่างในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่\n(รายละเอียด: {last_error})"
+            yield "ใช้งาน API เกินโควตา กรุณารอสักครู่แล้วลองใหม่อีกครั้ง"
+        else:
+            yield f"ระบบ Gemini ตอบช้าหรือไม่ว่างในขณะนี้ กรุณาลองใหม่อีกครั้งในอีกสักครู่\n\n(รายละเอียด: {last_error})"
 
     except Exception as e:
-        return f"เกิดข้อผิดพลาด: {str(e)}"
+        yield f"เกิดข้อผิดพลาด: {str(e)}"
 
 
 PPE_CHOICES = ["ถุงมือ", "แว่นตานิรภัย", "เสื้อช็อป", "สายสะท้อนแสง", "หน้ากากอนามัย"]
