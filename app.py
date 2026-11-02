@@ -14,7 +14,7 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash"⁠)
 
 PPE_ITEMS = [
     "ถุงมือ",
