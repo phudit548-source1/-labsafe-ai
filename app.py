@@ -148,60 +148,116 @@ def check_object(image, expected_list, api_key):
         return f"เกิดข้อผิดพลาด: {str(e)}"
 
 
-with gr.Blocks(title="LabSafe AI") as demo:
+PPE_CHOICES = ["ถุงมือ", "แว่นตานิรภัย", "เสื้อช็อป", "สายสะท้อนแสง", "หน้ากากอนามัย"]
 
-    gr.Markdown("# 🧪 LabSafe AI")
-    gr.Markdown("ระบบช่วยตรวจสอบ PPE จากภาพอัตโนมัติ")
+THEME = gr.themes.Soft(
+    primary_hue="teal",
+    secondary_hue="cyan",
+    neutral_hue="slate",
+    radius_size="lg",
+    font=[gr.themes.GoogleFont("Prompt"), "sans-serif"],
+)
 
-    api_key_input = gr.Textbox(
-        label="Gemini API Key",
-        type="password",
-        placeholder="วาง API Key ที่นี่"
+CSS = """
+.gradio-container { max-width: 1200px !important; margin: 0 auto !important; }
+#hero {
+    background: linear-gradient(135deg, #0f766e 0%, #0e7490 100%);
+    border-radius: 18px; padding: 26px 30px; margin-bottom: 8px;
+}
+#hero h1 { color: #fff !important; margin: 0 0 4px 0; font-size: 2rem; }
+#hero p { color: #ccfbf1 !important; margin: 0; font-size: 1.05rem; }
+.panel {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 18px !important; padding: 20px !important;
+    background: #ffffff !important;
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.07) !important;
+}
+.dark .panel { background: #0f172a !important; border-color: #1e293b !important; }
+.panel-title h3 { margin: 0 0 8px 0 !important; font-size: 1.15rem !important; }
+#btn-row button { min-height: 52px !important; font-size: 1.05rem !important; }
+#result-box {
+    min-height: 560px; line-height: 1.8; font-size: 1rem;
+    background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 14px; padding: 18px 20px !important;
+}
+.dark #result-box { background: #111827; border-color: #334155; }
+#footer p { text-align: center; color: var(--body-text-color-subdued) !important; font-size: 0.85rem; }
+"""
+
+# Gradio 6 รับ theme/css ที่ launch(); Gradio 5 รับที่ gr.Blocks()
+GRADIO_6 = int(gr.__version__.split(".")[0]) >= 6
+STYLE = dict(theme=THEME, css=CSS)
+
+with gr.Blocks(title="LabSafe AI", **({} if GRADIO_6 else STYLE)) as demo:
+
+    gr.HTML(
+        "<h1>🧪 LabSafe AI</h1>"
+        "<p>ระบบช่วยตรวจสอบอุปกรณ์ป้องกันส่วนบุคคล (PPE) จากภาพอัตโนมัติ สำหรับห้องปฏิบัติการเคมี</p>",
+        elem_id="hero",
     )
 
-    expected = gr.CheckboxGroup(
-        choices=[
-            "ถุงมือ",
-            "แว่นตานิรภัย",
-            "เสื้อช็อป",
-            "สายสะท้อนแสง",
-            "หน้ากากอนามัย"
-        ],
-        value=[
-            "ถุงมือ",
-            "แว่นตานิรภัย",
-            "เสื้อช็อป",
-            "สายสะท้อนแสง",
-            "หน้ากากอนามัย"
-        ],
-        label="เลือกประเภทวัตถุที่ต้องการตรวจสอบ"
-    )
+    with gr.Row(equal_height=False):
 
-    image = gr.Image(
-        type="pil",
-        label="ถ่ายรูปหรืออัปโหลดภาพ"
-    )
+        # ---------- ซ้าย: กรอกข้อมูล ----------
+        with gr.Column(scale=5, elem_classes="panel"):
+            gr.Markdown("### 📝 ข้อมูลสำหรับตรวจสอบ", elem_classes="panel-title")
 
-    button = gr.Button(
-        "🔍 ตรวจสอบ PPE",
-        variant="primary"
-    )
+            api_key_input = gr.Textbox(
+                label="🔑 Gemini API Key",
+                type="password",
+                placeholder="วาง API Key ที่นี่"
+            )
 
-    result = gr.Textbox(
-        label="ผลการตรวจสอบ",
-        lines=12
+            expected = gr.CheckboxGroup(
+                choices=PPE_CHOICES,
+                value=PPE_CHOICES,
+                label="🦺 เลือกประเภทวัตถุที่ต้องการตรวจสอบ"
+            )
+
+            image = gr.Image(
+                type="pil",
+                label="📷 ถ่ายรูปหรืออัปโหลดภาพ",
+                height=340
+            )
+
+            with gr.Row(elem_id="btn-row"):
+                clear_btn = gr.Button("ล้างข้อมูล", variant="secondary", scale=1)
+                button = gr.Button("🔍 ตรวจสอบ PPE", variant="primary", scale=2, elem_id="check-btn")
+
+        # ---------- ขวา: ผลการตรวจสอบ ----------
+        with gr.Column(scale=6, elem_classes="panel"):
+            gr.Markdown("### 📋 ผลการตรวจสอบ", elem_classes="panel-title")
+            result = gr.Markdown(
+                "_ผลการวิเคราะห์จะแสดงที่นี่ หลังจากกดปุ่ม **ตรวจสอบ PPE**_",
+                elem_id="result-box"
+            )
+
+    gr.Markdown(
+        "⚠️ การวิเคราะห์จากภาพเป็นเพียงการประเมินเบื้องต้น ไม่ใช่การรับรองความปลอดภัยในการเข้าห้องปฏิบัติการ",
+        elem_id="footer"
     )
 
     button.click(
+        fn=lambda: "⏳ กำลังวิเคราะห์ภาพ กรุณารอสักครู่...",
+        outputs=result,
+        queue=False,
+    ).then(
         fn=check_object,
         inputs=[image, expected, api_key_input],
         outputs=result
     )
 
+    clear_btn.click(
+        fn=lambda: (None, PPE_CHOICES, "_ผลการวิเคราะห์จะแสดงที่นี่ หลังจากกดปุ่ม **ตรวจสอบ PPE**_"),
+        outputs=[image, expected, result],
+        queue=False,
+    )
+
 if __name__ == "__main__":
     # Render ต้องการให้แอปฟังที่ 0.0.0.0 และพอร์ตจากตัวแปร PORT
-    # ไม่ใช้ share=True เพราะบน Render ไม่จำเป็นและทำให้เริ่มระบบช้า/ค้าง
-    demo.queue(default_concurrency_limit=4).launch(
+    launch_kwargs = dict(
         server_name="0.0.0.0",
         server_port=int(os.getenv("PORT", "7860")),
     )
+    if GRADIO_6:
+        launch_kwargs.update(STYLE)
+    demo.queue(default_concurrency_limit=4).launch(**launch_kwargs)
