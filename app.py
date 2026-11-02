@@ -179,8 +179,7 @@ with gr.Blocks(title="LabSafe AI") as demo:
 
     image = gr.Image(
         type="pil",
-        label="ถ่ายรูปหรืออัปโหลดภาพ",
-        sources=["upload", "webcam"]
+        label="ถ่ายรูปหรืออัปโหลดภาพ"
     )
 
     button = gr.Button(
